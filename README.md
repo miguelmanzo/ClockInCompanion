@@ -17,13 +17,29 @@ Android app that reads fingerprint matches from a USB-serial sensor (AS608/FPM11
 
 ## Current milestone
 
-Simulated fingerprint reader behind a `FingerprintReader` interface. Use the debug buttons on a debug build to emit match / no-match events.
+USB-serial fingerprint path (AS608/FPM11A over CP2102) plus a simulated reader for development without hardware.
 
-Hardware USB serial, MQTT, and offline queue land in later commits.
+### Simulated vs hardware
+
+`USE_SIMULATED_READER` in `app/build.gradle.kts` (BuildConfig):
+
+- `true` (default) — debug simulate / fake enroll buttons
+- `false` — opens CP2102 @ 57600, polls `PS_AutoIdentify`, debug enroll slots 1–2
+
+### Wiring (hardware)
+
+- Sensor TX → CP2102 RX
+- Sensor RX → CP2102 TX
+- Sensor VCC → CP2102 **5V** (FPM11A)
+- GND → GND
+- Phone OTG → CP2102 USB-A
+
+Grant the USB permission dialog when prompted.
 
 ## Project layout
 
 - `domain/` — models and `FingerprintReader` / debug interfaces
-- `data/reader/` — simulated (and later serial) implementations
+- `data/usb/` — `UsbSerialManager`, `As608Protocol`
+- `data/reader/` — simulated and serial implementations
 - `presentation/clockin/` — Compose UI + ViewModel
-- `di/` — Hilt bindings
+- `di/` — Hilt bindings (swaps reader via BuildConfig)

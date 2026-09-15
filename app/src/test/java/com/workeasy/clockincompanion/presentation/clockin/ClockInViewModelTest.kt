@@ -4,6 +4,7 @@ import app.cash.turbine.test
 import com.workeasy.clockincompanion.domain.model.ConnectionState
 import com.workeasy.clockincompanion.domain.model.ScanEvent
 import com.workeasy.clockincompanion.domain.reader.DebugFingerprintControls
+import com.workeasy.clockincompanion.domain.reader.EnrollResult
 import com.workeasy.clockincompanion.domain.reader.FingerprintReader
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -39,6 +40,8 @@ class ClockInViewModelTest {
         Dispatchers.setMain(dispatcher)
         every { fingerprintReader.connectionState } returns connectionState
         every { fingerprintReader.events() } returns events
+        every { debugControls.supportsSimulation } returns true
+        every { debugControls.supportsEnroll } returns true
         coEvery { fingerprintReader.connect() } coAnswers {
             connectionState.value = ConnectionState.CONNECTED
         }
@@ -102,5 +105,20 @@ class ClockInViewModelTest {
 
         assertEquals(ScanEvent.NoMatch, vm.lastEvent.value)
         coVerify(exactly = 1) { debugControls.simulateNoMatch() }
+    }
+
+    @Test
+    fun `enroll slot success updates enroll status`() = runTest(dispatcher) {
+        coEvery { debugControls.enrollSlot(1) } returns EnrollResult.Success
+
+        val vm = viewModel()
+        advanceUntilIdle()
+
+        vm.onEnrollSlot(1)
+        advanceUntilIdle()
+
+        assertEquals("Stored in slot 1", vm.enrollStatus.value)
+        assertFalse(vm.isEnrolling.value)
+        coVerify(exactly = 1) { debugControls.enrollSlot(1) }
     }
 }

@@ -12,8 +12,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -44,29 +46,37 @@ fun ClockInScreen(
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val lastEvent by viewModel.lastEvent.collectAsStateWithLifecycle()
     val isScanning by viewModel.isScanning.collectAsStateWithLifecycle()
+    val isEnrolling by viewModel.isEnrolling.collectAsStateWithLifecycle()
+    val enrollStatus by viewModel.enrollStatus.collectAsStateWithLifecycle()
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.SpaceBetween,
+            .padding(24.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         ConnectionStatusBar(state = connectionState)
 
         ScanResultCard(
             event = lastEvent,
-            isScanning = isScanning,
+            isScanning = isScanning || isEnrolling,
+            enrollStatus = enrollStatus,
             modifier = Modifier
-                .weight(1f)
                 .fillMaxWidth()
-                .padding(vertical = 24.dp),
+                .height(220.dp),
         )
 
         if (BuildConfig.DEBUG) {
             DebugControls(
-                enabled = !isScanning && connectionState == ConnectionState.CONNECTED,
+                enabled = !isScanning && !isEnrolling &&
+                    connectionState == ConnectionState.CONNECTED,
+                supportsSimulation = viewModel.supportsSimulation,
+                supportsEnroll = viewModel.supportsEnroll,
                 onSimulateMatch = viewModel::onSimulateMatch,
                 onSimulateNoMatch = viewModel::onSimulateNoMatch,
+                onEnrollSlot1 = { viewModel.onEnrollSlot(1) },
+                onEnrollSlot2 = { viewModel.onEnrollSlot(2) },
             )
         }
     }
@@ -105,9 +115,20 @@ private fun ConnectionStatusBar(state: ConnectionState) {
 private fun ScanResultCard(
     event: ScanEvent?,
     isScanning: Boolean,
+    enrollStatus: String?,
     modifier: Modifier = Modifier,
 ) {
     val (bg, primary, secondary) = when {
+        enrollStatus != null && isScanning -> Triple(
+            MaterialTheme.colorScheme.surfaceVariant,
+            "Enrolling…",
+            enrollStatus,
+        )
+        enrollStatus != null && event == null -> Triple(
+            MaterialTheme.colorScheme.surfaceVariant,
+            "Enrollment",
+            enrollStatus,
+        )
         isScanning -> Triple(
             MaterialTheme.colorScheme.surfaceVariant,
             "Scanning…",
@@ -116,7 +137,7 @@ private fun ScanResultCard(
         event == null -> Triple(
             MaterialTheme.colorScheme.surfaceVariant,
             "Place finger on sensor",
-            "Waiting for scan",
+            enrollStatus ?: "Waiting for scan",
         )
         event is ScanEvent.Matched -> Triple(
             MatchGreen.copy(alpha = 0.15f),
@@ -173,8 +194,12 @@ private fun ScanResultCard(
 @Composable
 private fun DebugControls(
     enabled: Boolean,
+    supportsSimulation: Boolean,
+    supportsEnroll: Boolean,
     onSimulateMatch: () -> Unit,
     onSimulateNoMatch: () -> Unit,
+    onEnrollSlot1: () -> Unit,
+    onEnrollSlot2: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
@@ -182,23 +207,58 @@ private fun DebugControls(
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
         )
-        Button(
-            onClick = onSimulateMatch,
-            enabled = enabled,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp),
-        ) {
-            Text("Simulate Scan (Match)")
+        if (supportsSimulation) {
+            Button(
+                onClick = onSimulateMatch,
+                enabled = enabled,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+            ) {
+                Text("Simulate Scan (Match)")
+            }
+            OutlinedButton(
+                onClick = onSimulateNoMatch,
+                enabled = enabled,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+            ) {
+                Text("Simulate No Match")
+            }
         }
-        OutlinedButton(
-            onClick = onSimulateNoMatch,
-            enabled = enabled,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp),
-        ) {
-            Text("Simulate No Match")
+        if (supportsEnroll) {
+            OutlinedButton(
+                onClick = onEnrollSlot1,
+                enabled = enabled,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+            ) {
+                Text("Enroll slot 1")
+            }
+            OutlinedButton(
+                onClick = onEnrollSlot2,
+                enabled = enabled,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+            ) {
+                Text("Enroll slot 2")
+            }
+        }
+        if (BuildConfig.USE_SIMULATED_READER) {
+            Text(
+                text = "Reader: simulated (set USE_SIMULATED_READER=false for USB)",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+            )
+        } else {
+            Text(
+                text = "Reader: USB serial (CP2102 @ 57600)",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+            )
         }
     }
 }

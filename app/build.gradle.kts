@@ -18,6 +18,10 @@ android {
         versionName = "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // true = SimulatedFingerprintReader (no hardware).
+        // false = SerialFingerprintReader over USB CP2102.
+        buildConfigField("boolean", "USE_SIMULATED_READER", "true")
     }
 
     buildTypes {
@@ -67,6 +71,8 @@ dependencies {
 
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
+
+    implementation(libs.usbSerialAndroid)
 
     debugImplementation(libs.androidx.ui.tooling)
 
