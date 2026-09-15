@@ -19,6 +19,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,6 +49,8 @@ fun ClockInScreen(
     val isScanning by viewModel.isScanning.collectAsStateWithLifecycle()
     val isEnrolling by viewModel.isEnrolling.collectAsStateWithLifecycle()
     val enrollStatus by viewModel.enrollStatus.collectAsStateWithLifecycle()
+    val publishStatus by viewModel.publishStatus.collectAsStateWithLifecycle()
+    val brokerHost by viewModel.brokerHost.collectAsStateWithLifecycle()
 
     Column(
         modifier = Modifier
@@ -62,9 +65,10 @@ fun ClockInScreen(
             event = lastEvent,
             isScanning = isScanning || isEnrolling,
             enrollStatus = enrollStatus,
+            publishStatus = publishStatus,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(220.dp),
+                .height(240.dp),
         )
 
         if (BuildConfig.DEBUG) {
@@ -73,6 +77,8 @@ fun ClockInScreen(
                     connectionState == ConnectionState.CONNECTED,
                 supportsSimulation = viewModel.supportsSimulation,
                 supportsEnroll = viewModel.supportsEnroll,
+                brokerHost = brokerHost,
+                onBrokerHostChanged = viewModel::onBrokerHostChanged,
                 onSimulateMatch = viewModel::onSimulateMatch,
                 onSimulateNoMatch = viewModel::onSimulateNoMatch,
                 onEnrollSlot1 = { viewModel.onEnrollSlot(1) },
@@ -116,6 +122,7 @@ private fun ScanResultCard(
     event: ScanEvent?,
     isScanning: Boolean,
     enrollStatus: String?,
+    publishStatus: String?,
     modifier: Modifier = Modifier,
 ) {
     val (bg, primary, secondary) = when {
@@ -142,7 +149,13 @@ private fun ScanResultCard(
         event is ScanEvent.Matched -> Triple(
             MatchGreen.copy(alpha = 0.15f),
             "Clocked In",
-            "Employee #${event.employeeId}",
+            buildString {
+                append("Employee #${event.employeeId}")
+                if (publishStatus != null) {
+                    append("\n")
+                    append(publishStatus)
+                }
+            },
         )
         event is ScanEvent.NoMatch -> Triple(
             NoMatchAmber.copy(alpha = 0.2f),
@@ -196,6 +209,8 @@ private fun DebugControls(
     enabled: Boolean,
     supportsSimulation: Boolean,
     supportsEnroll: Boolean,
+    brokerHost: String,
+    onBrokerHostChanged: (String) -> Unit,
     onSimulateMatch: () -> Unit,
     onSimulateNoMatch: () -> Unit,
     onEnrollSlot1: () -> Unit,
@@ -206,6 +221,17 @@ private fun DebugControls(
             text = "Debug",
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+        )
+        OutlinedTextField(
+            value = brokerHost,
+            onValueChange = onBrokerHostChanged,
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            label = { Text("MQTT broker host") },
+            placeholder = { Text("192.168.x.x (laptop on hotspot)") },
+            supportingText = {
+                Text("Topic: workeasy/demo/clockevents · port 1883")
+            },
         )
         if (supportsSimulation) {
             Button(

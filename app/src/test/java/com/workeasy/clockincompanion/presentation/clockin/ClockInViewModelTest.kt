@@ -1,11 +1,15 @@
 package com.workeasy.clockincompanion.presentation.clockin
 
 import app.cash.turbine.test
+import com.workeasy.clockincompanion.data.mqtt.MqttConfig
+import com.workeasy.clockincompanion.domain.model.ClockEvent
 import com.workeasy.clockincompanion.domain.model.ConnectionState
 import com.workeasy.clockincompanion.domain.model.ScanEvent
 import com.workeasy.clockincompanion.domain.reader.DebugFingerprintControls
 import com.workeasy.clockincompanion.domain.reader.EnrollResult
 import com.workeasy.clockincompanion.domain.reader.FingerprintReader
+import com.workeasy.clockincompanion.domain.usecase.ClockInResult
+import com.workeasy.clockincompanion.domain.usecase.HandleClockInUseCase
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -22,6 +26,7 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -34,6 +39,8 @@ class ClockInViewModelTest {
 
     private val fingerprintReader: FingerprintReader = mockk(relaxed = true)
     private val debugControls: DebugFingerprintControls = mockk(relaxed = true)
+    private val handleClockIn: HandleClockInUseCase = mockk()
+    private val mqttConfig = MqttConfig()
 
     @Before
     fun setUp() {
@@ -45,6 +52,11 @@ class ClockInViewModelTest {
         coEvery { fingerprintReader.connect() } coAnswers {
             connectionState.value = ConnectionState.CONNECTED
         }
+        coEvery { handleClockIn(any(), any()) } answers {
+            ClockInResult.Published(
+                ClockEvent(employeeId = firstArg(), deviceId = secondArg()),
+            )
+        }
     }
 
     @After
@@ -52,7 +64,12 @@ class ClockInViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun viewModel() = ClockInViewModel(fingerprintReader, debugControls)
+    private fun viewModel() = ClockInViewModel(
+        fingerprintReader,
+        debugControls,
+        handleClockIn,
+        mqttConfig,
+    )
 
     @Test
     fun `connects on init and exposes connected state`() = runTest(dispatcher) {
@@ -92,6 +109,22 @@ class ClockInViewModelTest {
     }
 
     @Test
+    fun `matched scan triggers mqtt publish use case`() = runTest(dispatcher) {
+        coEvery { debugControls.simulateMatch(any()) } coAnswers {
+            events.emit(ScanEvent.Matched(7))
+        }
+
+        val vm = viewModel()
+        advanceUntilIdle()
+
+        vm.onSimulateMatch()
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { handleClockIn(7, MqttConfig.DEVICE_ID) }
+        assertTrue(vm.publishStatus.value?.contains("Published") == true)
+    }
+
+    @Test
     fun `simulate no match updates lastEvent when reader emits NoMatch`() = runTest(dispatcher) {
         coEvery { debugControls.simulateNoMatch() } coAnswers {
             events.emit(ScanEvent.NoMatch)
@@ -105,6 +138,7 @@ class ClockInViewModelTest {
 
         assertEquals(ScanEvent.NoMatch, vm.lastEvent.value)
         coVerify(exactly = 1) { debugControls.simulateNoMatch() }
+        coVerify(exactly = 0) { handleClockIn(any(), any()) }
     }
 
     @Test

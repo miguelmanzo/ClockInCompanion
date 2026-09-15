@@ -17,7 +17,27 @@ Android app that reads fingerprint matches from a USB-serial sensor (AS608/FPM11
 
 ## Current milestone
 
-USB-serial fingerprint path (AS608/FPM11A over CP2102) plus a simulated reader for development without hardware.
+Fingerprint match (simulated or USB serial) publishes a clock-in JSON event over MQTT (HiveMQ client → Mosquitto).
+
+### MQTT demo
+
+1. On the laptop: `brew install mosquitto && mosquitto`
+2. Put phone + laptop on the same hotspot; note the laptop IP
+3. In the app debug field, set **MQTT broker host** to that IP
+4. Subscribe with MQTT Explorer to `workeasy/demo/clockevents`
+5. Simulate match (or scan a finger) → event appears on the broker
+
+Payload shape:
+
+```json
+{
+  "eventId": "uuid",
+  "employeeId": 1,
+  "eventType": "CLOCK_IN",
+  "deviceId": "demo-device-001",
+  "timestamp": 1726400000000
+}
+```
 
 ### Simulated vs hardware
 
@@ -38,8 +58,9 @@ Grant the USB permission dialog when prompted.
 
 ## Project layout
 
-- `domain/` — models and `FingerprintReader` / debug interfaces
+- `domain/` — models, `FingerprintReader`, `ClockEventPublisher`, use cases
 - `data/usb/` — `UsbSerialManager`, `As608Protocol`
 - `data/reader/` — simulated and serial implementations
+- `data/mqtt/` — HiveMQ publisher + broker config
 - `presentation/clockin/` — Compose UI + ViewModel
-- `di/` — Hilt bindings (swaps reader via BuildConfig)
+- `di/` — Hilt bindings
