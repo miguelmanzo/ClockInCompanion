@@ -1,0 +1,27 @@
+# Local-only planning (do not push)
+specs/
+
+# macOS
+.DS_Store
+
+# Android / IDE (populated once the app exists)
+*.iml
+.gradle/
+**/build/
+.idea/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.ap_
+*.aab
+*.dex
+*.class
+bin/
+gen/
+out/
+.navigation/
+*.jks
+*.keystore
+google-services.json
