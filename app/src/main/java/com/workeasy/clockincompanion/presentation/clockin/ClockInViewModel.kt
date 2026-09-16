@@ -8,6 +8,7 @@ import com.workeasy.clockincompanion.domain.model.ScanEvent
 import com.workeasy.clockincompanion.domain.reader.DebugFingerprintControls
 import com.workeasy.clockincompanion.domain.reader.EnrollResult
 import com.workeasy.clockincompanion.domain.reader.FingerprintReader
+import com.workeasy.clockincompanion.domain.store.ClockEventStore
 import com.workeasy.clockincompanion.domain.usecase.ClockInResult
 import com.workeasy.clockincompanion.domain.usecase.HandleClockInUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -25,6 +26,7 @@ class ClockInViewModel @Inject constructor(
     private val debugControls: DebugFingerprintControls,
     private val handleClockIn: HandleClockInUseCase,
     private val mqttConfig: MqttConfig,
+    clockEventStore: ClockEventStore,
 ) : ViewModel() {
 
     private val _lastEvent = MutableStateFlow<ScanEvent?>(null)
@@ -46,6 +48,13 @@ class ClockInViewModel @Inject constructor(
     val isEnrolling: StateFlow<Boolean> = _isEnrolling.asStateFlow()
     val publishStatus: StateFlow<String?> = _publishStatus.asStateFlow()
     val brokerHost: StateFlow<String> = mqttConfig.brokerHost
+
+    val pendingCount: StateFlow<Int> = clockEventStore.observePendingCount()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = 0,
+        )
 
     val supportsSimulation: Boolean = debugControls.supportsSimulation
     val supportsEnroll: Boolean = debugControls.supportsEnroll
@@ -108,8 +117,8 @@ class ClockInViewModel @Inject constructor(
             is ClockInResult.Published -> {
                 _publishStatus.value = "Published to ${MqttConfig.TOPIC}"
             }
-            is ClockInResult.PublishFailed -> {
-                _publishStatus.value = "Publish failed — check broker host / Mosquitto"
+            is ClockInResult.Queued -> {
+                _publishStatus.value = "Offline — queued for sync"
             }
         }
     }

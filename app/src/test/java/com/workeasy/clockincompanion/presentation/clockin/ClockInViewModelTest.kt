@@ -8,6 +8,7 @@ import com.workeasy.clockincompanion.domain.model.ScanEvent
 import com.workeasy.clockincompanion.domain.reader.DebugFingerprintControls
 import com.workeasy.clockincompanion.domain.reader.EnrollResult
 import com.workeasy.clockincompanion.domain.reader.FingerprintReader
+import com.workeasy.clockincompanion.domain.store.ClockEventStore
 import com.workeasy.clockincompanion.domain.usecase.ClockInResult
 import com.workeasy.clockincompanion.domain.usecase.HandleClockInUseCase
 import io.mockk.coEvery
@@ -18,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -40,6 +42,7 @@ class ClockInViewModelTest {
     private val fingerprintReader: FingerprintReader = mockk(relaxed = true)
     private val debugControls: DebugFingerprintControls = mockk(relaxed = true)
     private val handleClockIn: HandleClockInUseCase = mockk()
+    private val clockEventStore: ClockEventStore = mockk(relaxed = true)
     private val mqttConfig = MqttConfig()
 
     @Before
@@ -49,6 +52,7 @@ class ClockInViewModelTest {
         every { fingerprintReader.events() } returns events
         every { debugControls.supportsSimulation } returns true
         every { debugControls.supportsEnroll } returns true
+        every { clockEventStore.observePendingCount() } returns flowOf(0)
         coEvery { fingerprintReader.connect() } coAnswers {
             connectionState.value = ConnectionState.CONNECTED
         }
@@ -69,6 +73,7 @@ class ClockInViewModelTest {
         debugControls,
         handleClockIn,
         mqttConfig,
+        clockEventStore,
     )
 
     @Test
@@ -122,6 +127,23 @@ class ClockInViewModelTest {
 
         coVerify(exactly = 1) { handleClockIn(7, MqttConfig.DEVICE_ID) }
         assertTrue(vm.publishStatus.value?.contains("Published") == true)
+    }
+
+    @Test
+    fun `queued clock-in shows offline status`() = runTest(dispatcher) {
+        coEvery { debugControls.simulateMatch(any()) } coAnswers {
+            events.emit(ScanEvent.Matched(2))
+        }
+        coEvery { handleClockIn(any(), any()) } answers {
+            ClockInResult.Queued(ClockEvent(employeeId = firstArg(), deviceId = secondArg()))
+        }
+
+        val vm = viewModel()
+        advanceUntilIdle()
+        vm.onSimulateMatch()
+        advanceUntilIdle()
+
+        assertTrue(vm.publishStatus.value?.contains("queued", ignoreCase = true) == true)
     }
 
     @Test

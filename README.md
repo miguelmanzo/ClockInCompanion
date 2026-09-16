@@ -17,7 +17,14 @@ Android app that reads fingerprint matches from a USB-serial sensor (AS608/FPM11
 
 ## Current milestone
 
-Fingerprint match (simulated or USB serial) publishes a clock-in JSON event over MQTT (HiveMQ client → Mosquitto).
+Fingerprint match publishes clock-in events over MQTT. If publish fails, events are stored in Room and flushed by WorkManager when the network returns.
+
+### Offline demo
+
+1. Enter broker host and confirm a normal match publishes
+2. Enable airplane mode on the phone
+3. Simulate Match → status “Offline — queued” + amber pending banner
+4. Turn network back on → WorkManager flushes → banner clears → events appear in MQTT Explorer
 
 ### MQTT demo
 
@@ -62,5 +69,6 @@ Grant the USB permission dialog when prompted.
 - `data/usb/` — `UsbSerialManager`, `As608Protocol`
 - `data/reader/` — simulated and serial implementations
 - `data/mqtt/` — HiveMQ publisher + broker config
+- `data/offline/` — Room queue + WorkManager flush
 - `presentation/clockin/` — Compose UI + ViewModel
 - `di/` — Hilt bindings

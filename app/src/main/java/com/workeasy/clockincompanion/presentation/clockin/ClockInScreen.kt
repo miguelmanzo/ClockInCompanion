@@ -51,6 +51,7 @@ fun ClockInScreen(
     val enrollStatus by viewModel.enrollStatus.collectAsStateWithLifecycle()
     val publishStatus by viewModel.publishStatus.collectAsStateWithLifecycle()
     val brokerHost by viewModel.brokerHost.collectAsStateWithLifecycle()
+    val pendingCount by viewModel.pendingCount.collectAsStateWithLifecycle()
 
     Column(
         modifier = Modifier
@@ -71,6 +72,10 @@ fun ClockInScreen(
                 .height(240.dp),
         )
 
+        if (pendingCount > 0) {
+            PendingSyncBanner(count = pendingCount)
+        }
+
         if (BuildConfig.DEBUG) {
             DebugControls(
                 enabled = !isScanning && !isEnrolling &&
@@ -85,6 +90,28 @@ fun ClockInScreen(
                 onEnrollSlot2 = { viewModel.onEnrollSlot(2) },
             )
         }
+    }
+}
+
+@Composable
+private fun PendingSyncBanner(count: Int) {
+    val label = if (count == 1) {
+        "1 event pending sync"
+    } else {
+        "$count events pending sync"
+    }
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics { contentDescription = label },
+        shape = RoundedCornerShape(12.dp),
+        color = NoMatchAmber.copy(alpha = 0.25f),
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            style = MaterialTheme.typography.bodyLarge,
+        )
     }
 }
 
