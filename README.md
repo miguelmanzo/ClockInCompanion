@@ -1,12 +1,14 @@
 # Clock-In Companion
 
-Android app that reads fingerprint matches from a USB-serial sensor (AS608/FPM11A family), publishes clock-in events over MQTT, and queues events locally when offline.
+Android app that reads fingerprint matches from a USB-serial sensor (AS608 / FPM11A family),
+publishes clock-in events over MQTT, and queues events locally when offline.
 
-## Requirements
+## Stack
 
-- Android Studio Ladybug+ / JDK 17
-- Android device with USB OTG (for hardware path)
-- Optional: Mosquitto on a laptop for MQTT demo
+- Kotlin, Jetpack Compose, Hilt
+- USB serial: [usb-serial-for-android](https://github.com/mik3y/usb-serial-for-android)
+- MQTT: HiveMQ MQTT Client
+- Offline: Room + WorkManager
 
 ## Build
 
@@ -15,26 +17,56 @@ Android app that reads fingerprint matches from a USB-serial sensor (AS608/FPM11
 ./gradlew test
 ```
 
-## Current milestone
+Open the project in Android Studio and run on a device (USB OTG required for the hardware path).
 
-Fingerprint match publishes clock-in events over MQTT. If publish fails, events are stored in Room and flushed by WorkManager when the network returns.
+## Architecture
 
-### Offline demo
+`FingerprintReader` hides hardware behind an interface. Hilt binds either:
 
-1. Enter broker host and confirm a normal match publishes
-2. Enable airplane mode on the phone
-3. Simulate Match → status “Offline — queued” + amber pending banner
-4. Turn network back on → WorkManager flushes → banner clears → events appear in MQTT Explorer
+- `SimulatedFingerprintReader` (default), or
+- `SerialFingerprintReader` (USB CP2102)
 
-### MQTT demo
+Matched scans go through `HandleClockInUseCase`: **save to Room → publish MQTT → mark synced**.
+If publish fails, WorkManager retries when the network is available.
 
-1. On the laptop: `brew install mosquitto && mosquitto`
-2. Put phone + laptop on the same hotspot; note the laptop IP
-3. In the app debug field, set **MQTT broker host** to that IP
-4. Subscribe with MQTT Explorer to `workeasy/demo/clockevents`
-5. Simulate match (or scan a finger) → event appears on the broker
+## Simulated vs hardware
 
-Payload shape:
+In `app/build.gradle.kts`:
+
+```kotlin
+buildConfigField("boolean", "USE_SIMULATED_READER", "true")
+```
+
+| Value | Behavior |
+|---|---|
+| `true` (default) | Debug simulate / enroll buttons; no USB needed |
+| `false` | Opens CP2102 @ 57600 baud, polls AutoIdentify, real enroll slots 1–2 |
+
+Rebuild after changing the flag.
+
+## Hardware wiring (FPM11A + CP2102)
+
+```
+Sensor TX  →  CP2102 RX
+Sensor RX  →  CP2102 TX
+Sensor VCC →  CP2102 5V
+Sensor GND →  CP2102 GND
+Phone OTG  →  CP2102 USB-A
+```
+
+Grant the USB permission dialog when prompted. Ignore any “USB fingerprint” mode on the module; use UART only.
+
+## MQTT demo (Mosquitto)
+
+1. Install Mosquitto on the laptop (`brew install mosquitto` after Homebrew is set up).
+2. Run: `mosquitto` (port **1883**).
+3. Put phone and laptop on the same Wi‑Fi / phone hotspot.
+4. Note the laptop IP (`ipconfig getifaddr en0` or System Settings).
+5. In the app, set **MQTT broker host** to that IP.
+6. In MQTT Explorer, connect to `localhost:1883` and subscribe to `workeasy/demo/clockevents`.
+7. Tap **Simulate Scan (Match)** (or place an enrolled finger).
+
+Payload:
 
 ```json
 {
@@ -46,29 +78,36 @@ Payload shape:
 }
 ```
 
-### Simulated vs hardware
+Backup if LAN is blocked: set the broker host to a reachable cloud broker and subscribe there instead.
 
-`USE_SIMULATED_READER` in `app/build.gradle.kts` (BuildConfig):
+## Offline demo
 
-- `true` (default) — debug simulate / fake enroll buttons
-- `false` — opens CP2102 @ 57600, polls `PS_AutoIdentify`, debug enroll slots 1–2
+1. Confirm a match publishes while online.
+2. Enable airplane mode on the phone.
+3. Simulate / scan again → “Offline — queued” and an amber pending banner.
+4. Restore network → WorkManager flushes the queue → banner clears → events appear on the broker.
 
-### Wiring (hardware)
+## Enrollment (hardware)
 
-- Sensor TX → CP2102 RX
-- Sensor RX → CP2102 TX
-- Sensor VCC → CP2102 **5V** (FPM11A)
-- GND → GND
-- Phone OTG → CP2102 USB-A
-
-Grant the USB permission dialog when prompted.
+Use **Enroll slot 1** / **Enroll slot 2** in the debug panel (place finger, lift, place again).
+`employeeId` in events is the sensor page/slot id.
 
 ## Project layout
 
-- `domain/` — models, `FingerprintReader`, `ClockEventPublisher`, use cases
-- `data/usb/` — `UsbSerialManager`, `As608Protocol`
-- `data/reader/` — simulated and serial implementations
-- `data/mqtt/` — HiveMQ publisher + broker config
-- `data/offline/` — Room queue + WorkManager flush
-- `presentation/clockin/` — Compose UI + ViewModel
-- `di/` — Hilt bindings
+```
+domain/          models, FingerprintReader, ClockEventPublisher, use cases
+data/usb/        UsbSerialManager, As608Protocol
+data/reader/     simulated + serial implementations
+data/mqtt/       HiveMQ publisher + broker config
+data/offline/    Room queue + WorkManager flush
+presentation/    Compose UI + ViewModel
+di/              Hilt modules
+```
+
+## Quick cold-start checklist
+
+- [ ] `./gradlew assembleDebug` (or Run in Android Studio)
+- [ ] Mosquitto running; MQTT Explorer subscribed
+- [ ] Broker host set to laptop IP
+- [ ] Happy path: match → JSON on topic
+- [ ] Airplane mode → queued → reconnect → flush
