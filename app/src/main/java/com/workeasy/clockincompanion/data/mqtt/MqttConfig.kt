@@ -34,8 +34,8 @@ class MqttConfig @Inject constructor() {
     )
 
     companion object {
-        /** Empty until set in debug UI to the laptop hotspot IP (e.g. 192.168.43.10). */
-        const val DEFAULT_HOST = ""
+        /** Laptop demo broker — editable in debug UI if the IP changes. */
+        const val DEFAULT_HOST = "10.159.18.254"
         const val BROKER_PORT = 1883
         const val TOPIC = "workeasy/demo/clockevents"
         const val QOS = 1

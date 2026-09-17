@@ -3,11 +3,11 @@ package com.workeasy.clockincompanion.presentation.clockin
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.workeasy.clockincompanion.data.mqtt.MqttConfig
+import com.workeasy.clockincompanion.data.reader.SwitchableFingerprintReader
 import com.workeasy.clockincompanion.domain.model.ConnectionState
 import com.workeasy.clockincompanion.domain.model.ScanEvent
-import com.workeasy.clockincompanion.domain.reader.DebugFingerprintControls
+import com.workeasy.clockincompanion.domain.model.ScanPhase
 import com.workeasy.clockincompanion.domain.reader.EnrollResult
-import com.workeasy.clockincompanion.domain.reader.FingerprintReader
 import com.workeasy.clockincompanion.domain.store.ClockEventStore
 import com.workeasy.clockincompanion.domain.usecase.ClockInResult
 import com.workeasy.clockincompanion.domain.usecase.HandleClockInUseCase
@@ -22,8 +22,7 @@ import javax.inject.Inject
 
 @HiltViewModel
 class ClockInViewModel @Inject constructor(
-    private val fingerprintReader: FingerprintReader,
-    private val debugControls: DebugFingerprintControls,
+    private val reader: SwitchableFingerprintReader,
     private val handleClockIn: HandleClockInUseCase,
     private val mqttConfig: MqttConfig,
     clockEventStore: ClockEventStore,
@@ -35,12 +34,16 @@ class ClockInViewModel @Inject constructor(
     private val _isEnrolling = MutableStateFlow(false)
     private val _publishStatus = MutableStateFlow<String?>(null)
 
-    val connectionState: StateFlow<ConnectionState> = fingerprintReader.connectionState
+    val connectionState: StateFlow<ConnectionState> = reader.connectionState
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
             initialValue = ConnectionState.DISCONNECTED,
         )
+
+    val useSimulated: StateFlow<Boolean> = reader.useSimulated
+
+    val scanPhase: StateFlow<ScanPhase> = reader.scanPhase
 
     val lastEvent: StateFlow<ScanEvent?> = _lastEvent.asStateFlow()
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
@@ -56,15 +59,12 @@ class ClockInViewModel @Inject constructor(
             initialValue = 0,
         )
 
-    val supportsSimulation: Boolean = debugControls.supportsSimulation
-    val supportsEnroll: Boolean = debugControls.supportsEnroll
-
     init {
         viewModelScope.launch {
-            fingerprintReader.connect()
+            reader.connect()
         }
         viewModelScope.launch {
-            fingerprintReader.events().collect { event ->
+            reader.events().collect { event ->
                 _lastEvent.value = event
                 _isScanning.value = false
                 if (event is ScanEvent.Matched) {
@@ -78,30 +78,69 @@ class ClockInViewModel @Inject constructor(
         mqttConfig.updateBrokerHost(host)
     }
 
+    fun onReaderModeSelected(useSimulated: Boolean) {
+        if (reader.useSimulated.value == useSimulated) return
+        viewModelScope.launch {
+            runCatching { reader.setUseSimulated(useSimulated) }
+        }
+    }
+
     fun onSimulateMatch() {
-        if (!supportsSimulation || _isScanning.value || _isEnrolling.value) return
+        if (!reader.supportsSimulation || _isScanning.value || _isEnrolling.value) return
+        if (reader.scanPhase.value != ScanPhase.Idle) return
         viewModelScope.launch {
             _isScanning.value = true
-            debugControls.simulateMatch()
+            _lastEvent.value = null
+            try {
+                reader.simulateMatch()
+            } finally {
+                _isScanning.value = false
+            }
         }
     }
 
     fun onSimulateNoMatch() {
-        if (!supportsSimulation || _isScanning.value || _isEnrolling.value) return
+        if (!reader.supportsSimulation || _isScanning.value || _isEnrolling.value) return
+        if (reader.scanPhase.value != ScanPhase.Idle) return
         viewModelScope.launch {
             _isScanning.value = true
-            debugControls.simulateNoMatch()
+            _lastEvent.value = null
+            try {
+                reader.simulateNoMatch()
+            } finally {
+                _isScanning.value = false
+            }
         }
     }
 
     fun onEnrollSlot(slot: Int) {
-        if (!supportsEnroll || _isEnrolling.value || _isScanning.value) return
+        if (!reader.supportsEnroll || _isEnrolling.value || _isScanning.value) return
         viewModelScope.launch {
             _isEnrolling.value = true
+            _lastEvent.value = null
+            _publishStatus.value = null
             _enrollStatus.value = "Place finger for slot $slot…"
-            when (val result = debugControls.enrollSlot(slot)) {
+            when (val result = reader.enrollSlot(slot)) {
                 EnrollResult.Success -> {
-                    _enrollStatus.value = "Stored in slot $slot"
+                    _enrollStatus.value = "Stored in slot $slot — lift finger, then scan"
+                }
+                is EnrollResult.Failed -> {
+                    _enrollStatus.value = "Failed: ${result.message}"
+                }
+            }
+            _isEnrolling.value = false
+        }
+    }
+
+    fun onClearLibrary() {
+        if (!reader.supportsEnroll || _isEnrolling.value || _isScanning.value) return
+        viewModelScope.launch {
+            _isEnrolling.value = true
+            _lastEvent.value = null
+            _enrollStatus.value = "Clearing fingerprint library…"
+            when (val result = reader.clearLibrary()) {
+                EnrollResult.Success -> {
+                    _enrollStatus.value = "Library cleared"
                 }
                 is EnrollResult.Failed -> {
                     _enrollStatus.value = "Failed: ${result.message}"

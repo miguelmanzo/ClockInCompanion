@@ -4,6 +4,7 @@ import com.workeasy.clockincompanion.data.usb.As608Protocol
 import com.workeasy.clockincompanion.data.usb.UsbSerialManager
 import com.workeasy.clockincompanion.domain.model.ConnectionState
 import com.workeasy.clockincompanion.domain.model.ScanEvent
+import com.workeasy.clockincompanion.domain.model.ScanPhase
 import com.workeasy.clockincompanion.domain.reader.DebugFingerprintControls
 import com.workeasy.clockincompanion.domain.reader.EnrollResult
 import com.workeasy.clockincompanion.domain.reader.FingerprintReader
@@ -36,6 +37,9 @@ class SerialFingerprintReader @Inject constructor(
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     override val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
+    private val _scanPhase = MutableStateFlow(ScanPhase.Idle)
+    override val scanPhase: StateFlow<ScanPhase> = _scanPhase.asStateFlow()
+
     private val _events = MutableSharedFlow<ScanEvent>(extraBufferCapacity = 8)
     override fun events(): Flow<ScanEvent> = _events.asSharedFlow()
 
@@ -62,6 +66,7 @@ class SerialFingerprintReader @Inject constructor(
         scanJob?.cancel()
         scanJob = null
         usbSerialManager.close()
+        _scanPhase.value = ScanPhase.Idle
         _connectionState.value = ConnectionState.DISCONNECTED
     }
 
@@ -89,10 +94,33 @@ class SerialFingerprintReader @Inject constructor(
                 image2Tz(2)
                 regModel()
                 store(slot)
+                // Avoid an immediate auto clock-in while the finger is still down.
+                waitForFingerRemoved()
             }
             EnrollResult.Success
         } catch (e: Exception) {
             EnrollResult.Failed(e.message ?: "Enroll failed")
+        } finally {
+            enrollInProgress = false
+        }
+    }
+
+    override suspend fun clearLibrary(): EnrollResult {
+        if (_connectionState.value != ConnectionState.CONNECTED) {
+            return EnrollResult.Failed("Sensor not connected")
+        }
+        enrollInProgress = true
+        return try {
+            commandMutex.withLock {
+                val response = usbSerialManager.transact(As608Protocol.buildEmptyCommand())
+                val code = As608Protocol.confirmationCode(response)
+                if (code != As608Protocol.CONFIRM_OK) {
+                    return@withLock EnrollResult.Failed("Clear failed: 0x${code?.toString(16)}")
+                }
+                EnrollResult.Success
+            }
+        } catch (e: Exception) {
+            EnrollResult.Failed(e.message ?: "Clear failed")
         } finally {
             enrollInProgress = false
         }
@@ -112,18 +140,35 @@ class SerialFingerprintReader @Inject constructor(
 
     private suspend fun triggerIdentify() {
         commandMutex.withLock {
-            val response = usbSerialManager.transact(
-                As608Protocol.buildAutoIdentifyCommand(),
-                timeoutMs = 3_000L,
-            )
-            val event = As608Protocol.parseAutoIdentifyResponse(response)
-            // Ignore "no finger" noise during polling.
-            if (event is ScanEvent.Error && event.message.contains("No finger", ignoreCase = true)) {
-                return
+            try {
+                // Classic path — many FPM clones do not support AutoIdentify (0x32).
+                val image = usbSerialManager.transact(As608Protocol.buildGetImageCommand())
+                when (As608Protocol.confirmationCode(image)) {
+                    As608Protocol.CONFIRM_NO_FINGER -> return
+                    As608Protocol.CONFIRM_OK -> Unit
+                    else -> return // ignore idle noise
+                }
+
+                _scanPhase.value = ScanPhase.Matching
+                val tz = usbSerialManager.transact(As608Protocol.buildImage2TzCommand(1))
+                if (As608Protocol.confirmationCode(tz) != As608Protocol.CONFIRM_OK) {
+                    return
+                }
+
+                val search = usbSerialManager.transact(As608Protocol.buildSearchCommand())
+                val event = As608Protocol.parseSearchResponse(search)
+                if (event is ScanEvent.Error &&
+                    event.message.contains("No finger", ignoreCase = true)
+                ) {
+                    return
+                }
+                _events.emit(event)
+                // Keep result visible; don't re-scan until the finger is lifted.
+                _scanPhase.value = ScanPhase.Idle
+                awaitFingerRemoved()
+            } finally {
+                _scanPhase.value = ScanPhase.Idle
             }
-            val confirm = As608Protocol.confirmationCode(response)
-            if (confirm == As608Protocol.CONFIRM_NO_FINGER) return
-            _events.emit(event)
         }
     }
 
@@ -152,6 +197,20 @@ class SerialFingerprintReader @Inject constructor(
         error("Timed out waiting for finger to be removed")
     }
 
+    /** Soft wait used after a scan result — never throws. */
+    private suspend fun awaitFingerRemoved(timeoutMs: Long = 30_000L) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val response = runCatching {
+                usbSerialManager.transact(As608Protocol.buildGetImageCommand())
+            }.getOrNull() ?: return
+            when (As608Protocol.confirmationCode(response)) {
+                As608Protocol.CONFIRM_NO_FINGER -> return
+                else -> delay(250)
+            }
+        }
+    }
+
     private suspend fun image2Tz(bufferId: Int) {
         val response = usbSerialManager.transact(As608Protocol.buildImage2TzCommand(bufferId))
         val code = As608Protocol.confirmationCode(response)
@@ -177,6 +236,7 @@ class SerialFingerprintReader @Inject constructor(
     }
 
     companion object {
-        private const val SCAN_INTERVAL_MS = 2_000L
+        /** How often to poll when idle (no finger). */
+        private const val SCAN_INTERVAL_MS = 1_500L
     }
 }

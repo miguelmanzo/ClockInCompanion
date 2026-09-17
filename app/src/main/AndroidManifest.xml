@@ -19,17 +19,14 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:theme="@style/Theme.ClockInCompanion">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <intent-filter>
-                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
-            </intent-filter>
-            <meta-data
-                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
-                android:resource="@xml/device_filter" />
+            <!-- No USB_DEVICE_ATTACHED filter: plugging OTG must not relaunch the app.
+                 USB is opened from UsbSerialManager after the user is already in the app. -->
         </activity>
 
         <!-- Custom WorkManager init via HiltWorkerFactory in Application -->

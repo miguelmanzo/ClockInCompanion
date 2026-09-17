@@ -39,16 +39,31 @@ class As608ProtocolTest {
     }
 
     @Test
-    fun `parse no match response`() {
+    fun `parse search match returns page id`() {
+        val response = byteArrayOf(
+            0xEF.toByte(), 0x01,
+            0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(),
+            0x07,
+            0x00, 0x07,
+            0x00, // confirm OK
+            0x00, 0x01, // pageId 1
+            0x00, 0x64, // score
+            0x00, 0x00,
+        )
+        assertEquals(ScanEvent.Matched(1), As608Protocol.parseSearchResponse(response))
+    }
+
+    @Test
+    fun `parse search no match`() {
         val response = byteArrayOf(
             0xEF.toByte(), 0x01,
             0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(),
             0x07,
             0x00, 0x03,
             0x09,
-            0x00, 0x00,
+            0x00, 0x13,
         )
-        assertEquals(ScanEvent.NoMatch, As608Protocol.parseAutoIdentifyResponse(response))
+        assertEquals(ScanEvent.NoMatch, As608Protocol.parseSearchResponse(response))
     }
 
     @Test

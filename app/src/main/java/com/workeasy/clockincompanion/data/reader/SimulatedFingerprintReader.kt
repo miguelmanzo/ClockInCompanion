@@ -2,6 +2,7 @@ package com.workeasy.clockincompanion.data.reader
 
 import com.workeasy.clockincompanion.domain.model.ConnectionState
 import com.workeasy.clockincompanion.domain.model.ScanEvent
+import com.workeasy.clockincompanion.domain.model.ScanPhase
 import com.workeasy.clockincompanion.domain.reader.DebugFingerprintControls
 import com.workeasy.clockincompanion.domain.reader.EnrollResult
 import com.workeasy.clockincompanion.domain.reader.FingerprintReader
@@ -23,6 +24,9 @@ class SimulatedFingerprintReader @Inject constructor() :
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     override val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
+    private val _scanPhase = MutableStateFlow(ScanPhase.Idle)
+    override val scanPhase: StateFlow<ScanPhase> = _scanPhase.asStateFlow()
+
     private val _events = MutableSharedFlow<ScanEvent>(extraBufferCapacity = 8)
     override fun events(): Flow<ScanEvent> = _events.asSharedFlow()
 
@@ -37,21 +41,37 @@ class SimulatedFingerprintReader @Inject constructor() :
 
     override suspend fun disconnect() {
         _connectionState.value = ConnectionState.DISCONNECTED
+        _scanPhase.value = ScanPhase.Idle
     }
 
     override suspend fun simulateMatch(employeeId: Int) {
-        delay(800)
-        _events.emit(ScanEvent.Matched(employeeId))
+        try {
+            _scanPhase.value = ScanPhase.Matching
+            delay(800)
+            _events.emit(ScanEvent.Matched(employeeId))
+        } finally {
+            _scanPhase.value = ScanPhase.Idle
+        }
     }
 
     override suspend fun simulateNoMatch() {
-        delay(800)
-        _events.emit(ScanEvent.NoMatch)
+        try {
+            _scanPhase.value = ScanPhase.Matching
+            delay(800)
+            _events.emit(ScanEvent.NoMatch)
+        } finally {
+            _scanPhase.value = ScanPhase.Idle
+        }
     }
 
     override suspend fun enrollSlot(slot: Int): EnrollResult {
         if (slot !in 1..2) return EnrollResult.Failed("Slot must be 1 or 2")
         delay(1_200)
+        return EnrollResult.Success
+    }
+
+    override suspend fun clearLibrary(): EnrollResult {
+        delay(300)
         return EnrollResult.Success
     }
 }

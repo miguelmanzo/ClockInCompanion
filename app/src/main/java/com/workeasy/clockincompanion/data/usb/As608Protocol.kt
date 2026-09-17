@@ -20,6 +20,7 @@ object As608Protocol {
     const val CMD_SEARCH: Byte = 0x04
     const val CMD_REG_MODEL: Byte = 0x05
     const val CMD_STORE: Byte = 0x06
+    const val CMD_EMPTY: Byte = 0x0D
     const val CMD_AUTO_IDENTIFY: Byte = 0x32
 
     const val CONFIRM_OK = 0x00
@@ -52,6 +53,20 @@ object As608Protocol {
     fun buildImage2TzCommand(bufferId: Int): ByteArray =
         buildCommand(CMD_IMAGE_2_TZ, (bufferId and 0xFF).toByte())
 
+    /** Search templates using CharBuffer [bufferId] over [startPage, startPage + pageNum). */
+    fun buildSearchCommand(
+        bufferId: Int = 1,
+        startPage: Int = 0,
+        pageNum: Int = 200,
+    ): ByteArray = buildCommand(
+        CMD_SEARCH,
+        (bufferId and 0xFF).toByte(),
+        ((startPage shr 8) and 0xFF).toByte(),
+        (startPage and 0xFF).toByte(),
+        ((pageNum shr 8) and 0xFF).toByte(),
+        (pageNum and 0xFF).toByte(),
+    )
+
     fun buildRegModelCommand(): ByteArray = buildCommand(CMD_REG_MODEL)
 
     fun buildStoreCommand(pageId: Int, bufferId: Int = 1): ByteArray =
@@ -61,6 +76,8 @@ object As608Protocol {
             ((pageId shr 8) and 0xFF).toByte(),
             (pageId and 0xFF).toByte(),
         )
+
+    fun buildEmptyCommand(): ByteArray = buildCommand(CMD_EMPTY)
 
     fun confirmationCode(packet: ByteArray): Int? {
         if (packet.size < 10) return null
@@ -82,6 +99,23 @@ object As608Protocol {
                     ScanEvent.Error("Match response truncated")
                 } else {
                     val pageId = ((bytes[12].toInt() and 0xFF) shl 8) or (bytes[13].toInt() and 0xFF)
+                    ScanEvent.Matched(pageId)
+                }
+            }
+            CONFIRM_NO_MATCH -> ScanEvent.NoMatch
+            CONFIRM_NO_FINGER -> ScanEvent.Error("No finger on sensor")
+            else -> ScanEvent.Error("Sensor error code: 0x${confirm.toString(16)}")
+        }
+    }
+
+    /** Search ACK: confirm + pageId(2) + matchScore(2). */
+    fun parseSearchResponse(bytes: ByteArray): ScanEvent {
+        return when (val confirm = confirmationCode(bytes) ?: return ScanEvent.Error("Bad packet")) {
+            CONFIRM_OK -> {
+                if (bytes.size < 12) {
+                    ScanEvent.Error("Search response truncated")
+                } else {
+                    val pageId = ((bytes[10].toInt() and 0xFF) shl 8) or (bytes[11].toInt() and 0xFF)
                     ScanEvent.Matched(pageId)
                 }
             }

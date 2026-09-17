@@ -132,13 +132,13 @@ class UsbSerialManager @Inject constructor(
             cont.invokeOnCancellation {
                 runCatching { context.unregisterReceiver(receiver) }
             }
-            val flags = PendingIntent.FLAG_MUTABLE
-            val pi = PendingIntent.getBroadcast(
-                context,
-                0,
-                Intent(ACTION_USB_PERMISSION),
-                flags,
-            )
+            // Android 14+ requires an *explicit* Intent when using FLAG_MUTABLE
+            // (USB permission callback must remain mutable so the system can add extras).
+            val permissionIntent = Intent(ACTION_USB_PERMISSION).apply {
+                setPackage(context.packageName)
+            }
+            val flags = PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            val pi = PendingIntent.getBroadcast(context, 0, permissionIntent, flags)
             usbManager.requestPermission(device, pi)
         }
     }

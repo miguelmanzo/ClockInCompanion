@@ -2,12 +2,12 @@ package com.workeasy.clockincompanion.presentation.clockin
 
 import app.cash.turbine.test
 import com.workeasy.clockincompanion.data.mqtt.MqttConfig
+import com.workeasy.clockincompanion.data.reader.SwitchableFingerprintReader
 import com.workeasy.clockincompanion.domain.model.ClockEvent
 import com.workeasy.clockincompanion.domain.model.ConnectionState
 import com.workeasy.clockincompanion.domain.model.ScanEvent
-import com.workeasy.clockincompanion.domain.reader.DebugFingerprintControls
+import com.workeasy.clockincompanion.domain.model.ScanPhase
 import com.workeasy.clockincompanion.domain.reader.EnrollResult
-import com.workeasy.clockincompanion.domain.reader.FingerprintReader
 import com.workeasy.clockincompanion.domain.store.ClockEventStore
 import com.workeasy.clockincompanion.domain.usecase.ClockInResult
 import com.workeasy.clockincompanion.domain.usecase.HandleClockInUseCase
@@ -37,10 +37,11 @@ class ClockInViewModelTest {
 
     private val dispatcher = StandardTestDispatcher()
     private val connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
+    private val useSimulated = MutableStateFlow(true)
+    private val scanPhase = MutableStateFlow(ScanPhase.Idle)
     private val events = MutableSharedFlow<ScanEvent>(extraBufferCapacity = 8)
 
-    private val fingerprintReader: FingerprintReader = mockk(relaxed = true)
-    private val debugControls: DebugFingerprintControls = mockk(relaxed = true)
+    private val reader: SwitchableFingerprintReader = mockk(relaxed = true)
     private val handleClockIn: HandleClockInUseCase = mockk()
     private val clockEventStore: ClockEventStore = mockk(relaxed = true)
     private val mqttConfig = MqttConfig()
@@ -48,13 +49,18 @@ class ClockInViewModelTest {
     @Before
     fun setUp() {
         Dispatchers.setMain(dispatcher)
-        every { fingerprintReader.connectionState } returns connectionState
-        every { fingerprintReader.events() } returns events
-        every { debugControls.supportsSimulation } returns true
-        every { debugControls.supportsEnroll } returns true
+        every { reader.connectionState } returns connectionState
+        every { reader.useSimulated } returns useSimulated
+        every { reader.scanPhase } returns scanPhase
+        every { reader.events() } returns events
+        every { reader.supportsSimulation } returns true
+        every { reader.supportsEnroll } returns true
         every { clockEventStore.observePendingCount() } returns flowOf(0)
-        coEvery { fingerprintReader.connect() } coAnswers {
+        coEvery { reader.connect() } coAnswers {
             connectionState.value = ConnectionState.CONNECTED
+        }
+        coEvery { reader.setUseSimulated(any()) } coAnswers {
+            useSimulated.value = firstArg()
         }
         coEvery { handleClockIn(any(), any()) } answers {
             ClockInResult.Published(
@@ -69,8 +75,7 @@ class ClockInViewModelTest {
     }
 
     private fun viewModel() = ClockInViewModel(
-        fingerprintReader,
-        debugControls,
+        reader,
         handleClockIn,
         mqttConfig,
         clockEventStore,
@@ -87,12 +92,12 @@ class ClockInViewModelTest {
             cancelAndIgnoreRemainingEvents()
         }
 
-        coVerify(exactly = 1) { fingerprintReader.connect() }
+        coVerify(exactly = 1) { reader.connect() }
     }
 
     @Test
     fun `simulate match updates lastEvent when reader emits Matched`() = runTest(dispatcher) {
-        coEvery { debugControls.simulateMatch(any()) } coAnswers {
+        coEvery { reader.simulateMatch(any()) } coAnswers {
             events.emit(ScanEvent.Matched(1))
         }
 
@@ -109,13 +114,13 @@ class ClockInViewModelTest {
             cancelAndIgnoreRemainingEvents()
         }
 
-        coVerify(exactly = 1) { debugControls.simulateMatch(any()) }
+        coVerify(exactly = 1) { reader.simulateMatch(any()) }
         assertFalse(vm.isScanning.value)
     }
 
     @Test
     fun `matched scan triggers mqtt publish use case`() = runTest(dispatcher) {
-        coEvery { debugControls.simulateMatch(any()) } coAnswers {
+        coEvery { reader.simulateMatch(any()) } coAnswers {
             events.emit(ScanEvent.Matched(7))
         }
 
@@ -131,7 +136,7 @@ class ClockInViewModelTest {
 
     @Test
     fun `queued clock-in shows offline status`() = runTest(dispatcher) {
-        coEvery { debugControls.simulateMatch(any()) } coAnswers {
+        coEvery { reader.simulateMatch(any()) } coAnswers {
             events.emit(ScanEvent.Matched(2))
         }
         coEvery { handleClockIn(any(), any()) } answers {
@@ -148,7 +153,7 @@ class ClockInViewModelTest {
 
     @Test
     fun `simulate no match updates lastEvent when reader emits NoMatch`() = runTest(dispatcher) {
-        coEvery { debugControls.simulateNoMatch() } coAnswers {
+        coEvery { reader.simulateNoMatch() } coAnswers {
             events.emit(ScanEvent.NoMatch)
         }
 
@@ -159,13 +164,13 @@ class ClockInViewModelTest {
         advanceUntilIdle()
 
         assertEquals(ScanEvent.NoMatch, vm.lastEvent.value)
-        coVerify(exactly = 1) { debugControls.simulateNoMatch() }
+        coVerify(exactly = 1) { reader.simulateNoMatch() }
         coVerify(exactly = 0) { handleClockIn(any(), any()) }
     }
 
     @Test
     fun `enroll slot success updates enroll status`() = runTest(dispatcher) {
-        coEvery { debugControls.enrollSlot(1) } returns EnrollResult.Success
+        coEvery { reader.enrollSlot(1) } returns EnrollResult.Success
 
         val vm = viewModel()
         advanceUntilIdle()
@@ -173,8 +178,20 @@ class ClockInViewModelTest {
         vm.onEnrollSlot(1)
         advanceUntilIdle()
 
-        assertEquals("Stored in slot 1", vm.enrollStatus.value)
+        assertEquals("Stored in slot 1 — lift finger, then scan", vm.enrollStatus.value)
         assertFalse(vm.isEnrolling.value)
-        coVerify(exactly = 1) { debugControls.enrollSlot(1) }
+        coVerify(exactly = 1) { reader.enrollSlot(1) }
+    }
+
+    @Test
+    fun `reader mode switch updates useSimulated`() = runTest(dispatcher) {
+        val vm = viewModel()
+        advanceUntilIdle()
+
+        vm.onReaderModeSelected(false)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { reader.setUseSimulated(false) }
+        assertFalse(vm.useSimulated.value)
     }
 }

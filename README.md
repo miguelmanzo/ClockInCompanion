@@ -21,28 +21,17 @@ Open the project in Android Studio and run on a device (USB OTG required for the
 
 ## Architecture
 
-`FingerprintReader` hides hardware behind an interface. Hilt binds either:
-
-- `SimulatedFingerprintReader` (default), or
-- `SerialFingerprintReader` (USB CP2102)
+`FingerprintReader` hides hardware behind an interface. Hilt binds a
+`SwitchableFingerprintReader` that delegates to simulated or USB serial.
 
 Matched scans go through `HandleClockInUseCase`: **save to Room → publish MQTT → mark synced**.
 If publish fails, WorkManager retries when the network is available.
 
 ## Simulated vs hardware
 
-In `app/build.gradle.kts`:
+In **Demo controls**, tap **Simulated** / **USB** to switch at runtime.
 
-```kotlin
-buildConfigField("boolean", "USE_SIMULATED_READER", "true")
-```
-
-| Value | Behavior |
-|---|---|
-| `true` (default) | Debug simulate / enroll buttons; no USB needed |
-| `false` | Opens CP2102 @ 57600 baud, polls AutoIdentify, real enroll slots 1–2 |
-
-Rebuild after changing the flag.
+Initial mode follows `USE_SIMULATED_READER` in `app/build.gradle.kts` (default `true`).
 
 ## Hardware wiring (FPM11A + CP2102)
 

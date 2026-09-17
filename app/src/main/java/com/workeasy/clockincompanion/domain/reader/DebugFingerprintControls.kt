@@ -15,4 +15,5 @@ interface DebugFingerprintControls {
     suspend fun simulateMatch(employeeId: Int = 1)
     suspend fun simulateNoMatch()
     suspend fun enrollSlot(slot: Int): EnrollResult
+    suspend fun clearLibrary(): EnrollResult
 }

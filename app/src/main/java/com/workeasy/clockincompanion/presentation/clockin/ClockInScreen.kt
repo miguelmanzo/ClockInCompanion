@@ -42,9 +42,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.airbnb.lottie.compose.LottieAnimation
+import com.airbnb.lottie.compose.LottieCompositionSpec
+import com.airbnb.lottie.compose.LottieConstants
+import com.airbnb.lottie.compose.rememberLottieComposition
 import com.workeasy.clockincompanion.BuildConfig
+import com.workeasy.clockincompanion.R
 import com.workeasy.clockincompanion.domain.model.ConnectionState
 import com.workeasy.clockincompanion.domain.model.ScanEvent
+import com.workeasy.clockincompanion.domain.model.ScanPhase
 import com.workeasy.clockincompanion.presentation.theme.ErrorRed
 import com.workeasy.clockincompanion.presentation.theme.MatchGreen
 import com.workeasy.clockincompanion.presentation.theme.NoMatchAmber
@@ -61,6 +67,8 @@ fun ClockInScreen(
     val publishStatus by viewModel.publishStatus.collectAsStateWithLifecycle()
     val brokerHost by viewModel.brokerHost.collectAsStateWithLifecycle()
     val pendingCount by viewModel.pendingCount.collectAsStateWithLifecycle()
+    val useSimulated by viewModel.useSimulated.collectAsStateWithLifecycle()
+    val scanPhase by viewModel.scanPhase.collectAsStateWithLifecycle()
 
     Column(
         modifier = Modifier
@@ -79,7 +87,7 @@ fun ClockInScreen(
             },
         )
         Text(
-            text = "Fingerprint clock-in over USB serial, MQTT, and offline queue",
+            text = "Fingerprint clock-in over USB serial, MQTT, and offline queue. By Miguel Manzo",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
         )
@@ -88,7 +96,8 @@ fun ClockInScreen(
 
         ScanResultCard(
             event = lastEvent,
-            isBusy = isScanning || isEnrolling,
+            scanPhase = scanPhase,
+            isEnrolling = isEnrolling,
             enrollStatus = enrollStatus,
             publishStatus = publishStatus,
             modifier = Modifier
@@ -103,15 +112,17 @@ fun ClockInScreen(
         if (BuildConfig.DEBUG) {
             DebugControls(
                 enabled = !isScanning && !isEnrolling &&
+                    scanPhase == ScanPhase.Idle &&
                     connectionState == ConnectionState.CONNECTED,
-                supportsSimulation = viewModel.supportsSimulation,
-                supportsEnroll = viewModel.supportsEnroll,
+                useSimulated = useSimulated,
+                onReaderModeSelected = viewModel::onReaderModeSelected,
                 brokerHost = brokerHost,
                 onBrokerHostChanged = viewModel::onBrokerHostChanged,
                 onSimulateMatch = viewModel::onSimulateMatch,
                 onSimulateNoMatch = viewModel::onSimulateNoMatch,
                 onEnrollSlot1 = { viewModel.onEnrollSlot(1) },
                 onEnrollSlot2 = { viewModel.onEnrollSlot(2) },
+                onClearLibrary = viewModel::onClearLibrary,
             )
         }
     }
@@ -178,21 +189,29 @@ private fun ConnectionStatusBar(state: ConnectionState) {
 @Composable
 private fun ScanResultCard(
     event: ScanEvent?,
-    isBusy: Boolean,
+    scanPhase: ScanPhase,
+    isEnrolling: Boolean,
     enrollStatus: String?,
     publishStatus: String?,
     modifier: Modifier = Modifier,
 ) {
+    val showSpinner = isEnrolling || scanPhase != ScanPhase.Idle
     val (bg, primary, secondary) = when {
-        isBusy && enrollStatus != null -> Triple(
+        isEnrolling && enrollStatus != null -> Triple(
             MaterialTheme.colorScheme.surfaceVariant,
             "Enrolling…",
             enrollStatus,
         )
-        isBusy -> Triple(
+        scanPhase == ScanPhase.Matching || scanPhase == ScanPhase.FingerDetected -> Triple(
             MaterialTheme.colorScheme.surfaceVariant,
-            "Scanning…",
-            "Please wait",
+            "Identifying…",
+            "Matching fingerprint",
+        )
+        // Prefer enroll result over a stale/race match right after enroll.
+        !enrollStatus.isNullOrBlank() && event == null -> Triple(
+            MaterialTheme.colorScheme.surfaceVariant,
+            "Enrollment",
+            enrollStatus,
         )
         event is ScanEvent.Matched -> Triple(
             MatchGreen.copy(alpha = 0.18f),
@@ -242,11 +261,19 @@ private fun ScanResultCard(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             AnimatedContent(
-                targetState = primary to secondary,
+                targetState = Triple(showSpinner, primary, secondary),
                 transitionSpec = { fadeIn() togetherWith fadeOut() },
                 label = "scanResult",
-            ) { (title, subtitle) ->
+            ) { (spinner, title, subtitle) ->
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    if (spinner) {
+                        IdentifyingLottie(
+                            modifier = Modifier
+                                .size(96.dp)
+                                .semantics { contentDescription = "Scanning in progress" },
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
                     Text(
                         text = title,
                         style = MaterialTheme.typography.headlineMedium,
@@ -266,16 +293,29 @@ private fun ScanResultCard(
 }
 
 @Composable
+private fun IdentifyingLottie(modifier: Modifier = Modifier) {
+    val composition by rememberLottieComposition(
+        LottieCompositionSpec.RawRes(R.raw.fingerprint_identifying),
+    )
+    LottieAnimation(
+        composition = composition,
+        iterations = LottieConstants.IterateForever,
+        modifier = modifier,
+    )
+}
+
+@Composable
 private fun DebugControls(
     enabled: Boolean,
-    supportsSimulation: Boolean,
-    supportsEnroll: Boolean,
+    useSimulated: Boolean,
+    onReaderModeSelected: (Boolean) -> Unit,
     brokerHost: String,
     onBrokerHostChanged: (String) -> Unit,
     onSimulateMatch: () -> Unit,
     onSimulateNoMatch: () -> Unit,
     onEnrollSlot1: () -> Unit,
     onEnrollSlot2: () -> Unit,
+    onClearLibrary: () -> Unit,
 ) {
     Surface(
         shape = RoundedCornerShape(16.dp),
@@ -321,7 +361,39 @@ private fun DebugControls(
 
             HorizontalDivider()
 
-            if (supportsSimulation) {
+            Text(
+                text = "Scanner",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                val modeModifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 48.dp)
+                if (useSimulated) {
+                    Button(
+                        onClick = { onReaderModeSelected(true) },
+                        modifier = modeModifier,
+                    ) { Text("Simulated") }
+                    OutlinedButton(
+                        onClick = { onReaderModeSelected(false) },
+                        modifier = modeModifier,
+                    ) { Text("USB") }
+                } else {
+                    OutlinedButton(
+                        onClick = { onReaderModeSelected(true) },
+                        modifier = modeModifier,
+                    ) { Text("Simulated") }
+                    Button(
+                        onClick = { onReaderModeSelected(false) },
+                        modifier = modeModifier,
+                    ) { Text("USB") }
+                }
+            }
+
+            if (useSimulated) {
                 Button(
                     onClick = onSimulateMatch,
                     enabled = enabled,
@@ -342,36 +414,33 @@ private fun DebugControls(
                 }
             }
 
-            if (supportsEnroll) {
-                OutlinedButton(
-                    onClick = onEnrollSlot1,
-                    enabled = enabled,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 56.dp),
-                ) {
-                    Text("Enroll slot 1")
-                }
-                OutlinedButton(
-                    onClick = onEnrollSlot2,
-                    enabled = enabled,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 56.dp),
-                ) {
-                    Text("Enroll slot 2")
-                }
+            OutlinedButton(
+                onClick = onEnrollSlot1,
+                enabled = enabled,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 56.dp),
+            ) {
+                Text("Enroll slot 1")
             }
-
-            Text(
-                text = if (BuildConfig.USE_SIMULATED_READER) {
-                    "Reader: simulated — set USE_SIMULATED_READER=false for USB hardware"
-                } else {
-                    "Reader: USB serial (CP2102 @ 57600)"
-                },
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-            )
+            OutlinedButton(
+                onClick = onEnrollSlot2,
+                enabled = enabled,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 56.dp),
+            ) {
+                Text("Enroll slot 2")
+            }
+            OutlinedButton(
+                onClick = onClearLibrary,
+                enabled = enabled,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 56.dp),
+            ) {
+                Text("Clear fingerprint library")
+            }
         }
     }
 }
